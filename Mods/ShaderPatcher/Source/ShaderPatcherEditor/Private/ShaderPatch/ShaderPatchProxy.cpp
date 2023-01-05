@@ -1,8 +1,9 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 #include "ShaderPatch/ShaderPatchProxy.h"
 #include "FlibHotPatcherCoreHelper.h"
-#include "Commandlets/HotShaderPatchCommandlet.h"
+#include "FlibShaderCodeLibraryHelper.h"
 #include "ShaderPatch/FlibShaderPatchHelper.h"
+#include "ShaderPatcherEditor.h"
 
 #define LOCTEXT_NAMESPACE "HotPatcherShaderPatchProxy"
 
@@ -11,7 +12,7 @@ bool UShaderPatchProxy::DoExport()
 	bool bStatus = false;
 	for(const auto& PlatformConfig:GetSettingObject()->ShaderPatchConfigs)
 	{
-		UE_LOG(LogHotShaderPatchCommandlet,Display,TEXT("Generating Shader Patch for %s"),*THotPatcherTemplateHelper::GetEnumNameByValue(PlatformConfig.Platform));
+		UE_LOG(LogShaderPatcherEditor,Display,TEXT("Generating Shader Patch for %s"),*THotPatcherTemplateHelper::GetEnumNameByValue(PlatformConfig.Platform));
 		
 		FString SaveToPath = FPaths::Combine(GetSettingObject()->GetSaveAbsPath(),GetSettingObject()->VersionID,THotPatcherTemplateHelper::GetEnumNameByValue(PlatformConfig.Platform));
 		bool bCreateStatus = UFlibShaderPatchHelper::CreateShaderCodePatch(
@@ -26,7 +27,7 @@ bool UShaderPatchProxy::DoExport()
 		{
 			TMap<FName, TSet<FString>> FormatLibraryMap;
 			TArray<FString> LibraryFiles;
-			IFileManager::Get().FindFiles(LibraryFiles, *(ShaderPatchDir), *UFlibShaderPatchHelper::ShaderExtension);
+			IFileManager::Get().FindFiles(LibraryFiles, *(ShaderPatchDir), *UFlibShaderCodeLibraryHelper::ShaderExtension);
 	
 			for (FString const& Path : LibraryFiles)
 			{
@@ -56,7 +57,7 @@ bool UShaderPatchProxy::DoExport()
 				TArray<FString> LibraryNames= ShaderFormatLibraryMap[FormatName].Array();
 				for(const auto& LibrartName:LibraryNames)
 				{
-					FString OutputFilePath = UFlibShaderPatchHelper::GetCodeArchiveFilename(SaveToPath, LibrartName, FormatName);
+					FString OutputFilePath = UFlibShaderCodeLibraryHelper::GetCodeArchiveFilename(SaveToPath, LibrartName, FormatName);
 					if(FPaths::FileExists(OutputFilePath))
 					{
 						bStatus = true;
@@ -66,12 +67,12 @@ bool UShaderPatchProxy::DoExport()
 						}
 						else
 						{
-							UE_LOG(LogHotShaderPatchCommandlet,Display,TEXT("%s"),*Msg.ToString());
+							UE_LOG(LogShaderPatcherEditor,Display,TEXT("%s"),*Msg.ToString());
 						}
 					}
 					else
 					{
-						UE_LOG(LogHotShaderPatchCommandlet,Display,TEXT("ERROR: %s not found!"),*OutputFilePath);
+						UE_LOG(LogShaderPatcherEditor,Display,TEXT("ERROR: %s not found!"),*OutputFilePath);
 					}
 				}
 			}
@@ -94,7 +95,7 @@ bool UShaderPatchProxy::DoExport()
 			}
 			else
 			{
-				UE_LOG(LogHotShaderPatchCommandlet,Display,TEXT("%s"),*Msg.ToString());
+				UE_LOG(LogShaderPatcherEditor,Display,TEXT("%s"),*Msg.ToString());
 			}
 		}
 	}

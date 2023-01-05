@@ -8,7 +8,7 @@
 
 
 UCLASS()
-class HOTPATCHERCORE_API UGameFeatureProxy:public UHotPatcherProxyBase
+class GAMEFEATUREPACKEREDITOR_API UGameFeatureProxy:public UHotPatcherProxyBase
 {
     GENERATED_BODY()
 public:

@@ -1,12 +1,9 @@
-[submodule "Mods/HotMultiCooker"]
-	path = Mods/HotMultiCooker
-	url = git@github.com:hxhb/HotMultiCooker.git
 [submodule "Mods/RemakePak"]
 	path = Mods/RemakePak
 	url = git@github.com:hxhb/RemakePak.git
 [submodule "Mods/libzstd"]
 	path = Mods/libzstd
 	url = git@github.com:hxhb/ue-zstd.git
-[submodule "Mods/HotChunker"]
-	path = Mods/HotChunker
-	url = git@github.com:hxhb/HotChunker.git
+[submodule "Mods/HDiffPatchUE"]
+	path = Mods/HDiffPatchUE
+	url = git@github.com:hxhb/HDiffPatchUE.git

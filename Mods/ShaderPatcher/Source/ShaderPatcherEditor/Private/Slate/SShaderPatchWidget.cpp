@@ -1,4 +1,4 @@
-#include "ShaderPatch/SShaderPatchWidget.h"
+#include "Slate/SShaderPatchWidget.h"
 #include "FlibPatchParserHelper.h"
 #include "FlibHotPatcherCoreHelper.h"
 #include "FlibHotPatcherEditorHelper.h"

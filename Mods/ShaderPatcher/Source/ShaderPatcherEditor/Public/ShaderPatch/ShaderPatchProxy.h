@@ -11,7 +11,7 @@
  * 
  */
 UCLASS()
-class HOTPATCHERCORE_API UShaderPatchProxy : public UHotPatcherProxyBase
+class SHADERPATCHEREDITOR_API UShaderPatchProxy : public UHotPatcherProxyBase
 {
 	GENERATED_BODY()
 public:

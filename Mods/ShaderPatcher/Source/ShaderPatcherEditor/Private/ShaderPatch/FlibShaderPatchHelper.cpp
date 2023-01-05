@@ -9,10 +9,6 @@
 #include "Settings/ProjectPackagingSettings.h"
 
 
-FString UFlibShaderPatchHelper::ShaderExtension = TEXT(".ushaderbytecode");
-FString UFlibShaderPatchHelper::ShaderAssetInfoExtension = TEXT(".assetinfo.json");
-FString UFlibShaderPatchHelper::StableExtension = TEXT(".scl.csv");
-
 bool UFlibShaderPatchHelper::CreateShaderCodePatch(TArray<FString> const& OldMetaDataDirs, FString const& NewMetaDataDir, FString const& OutDir, bool bNativeFormat,bool bDeterministicShaderCodeOrder)
 {
 #if	ENGINE_MAJOR_VERSION > 4 || ENGINE_MINOR_VERSION > 26

@@ -21,7 +21,7 @@
 
 
 USTRUCT(BlueprintType)
-struct FShaderPatchConf
+struct SHADERPATCHEREDITOR_API FShaderPatchConf
 {
 	GENERATED_USTRUCT_BODY()
 	
@@ -40,7 +40,7 @@ struct FShaderPatchConf
 
 /** Singleton wrapper to allow for using the setting structure in SSettingsView */
 USTRUCT(BlueprintType)
-struct HOTPATCHERCORE_API FExportShaderPatchSettings:public FHotPatcherSettingBase
+struct SHADERPATCHEREDITOR_API FExportShaderPatchSettings:public FHotPatcherSettingBase
 {
 	GENERATED_USTRUCT_BODY()
 public:

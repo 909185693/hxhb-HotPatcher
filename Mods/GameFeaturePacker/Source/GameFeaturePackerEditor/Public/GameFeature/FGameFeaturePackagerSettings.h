@@ -21,7 +21,7 @@
 
 /** Singleton wrapper to allow for using the setting structure in SSettingsView */
 USTRUCT(BlueprintType)
-struct HOTPATCHERCORE_API FGameFeaturePackagerSettings:public FHotPatcherSettingBase
+struct GAMEFEATUREPACKEREDITOR_API FGameFeaturePackagerSettings:public FHotPatcherSettingBase
 {
 	GENERATED_USTRUCT_BODY()
 public:
