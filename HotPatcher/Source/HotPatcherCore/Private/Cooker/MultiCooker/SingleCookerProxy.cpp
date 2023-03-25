@@ -281,6 +281,12 @@ void USingleCookerProxy::ExecCookCluster(const FCookCluster& CookCluster)
 {
 	SCOPED_NAMED_EVENT_TEXT("ExecCookCluster",FColor::Red);
 
+	// for GC
+	{
+		GEngine->ForceGarbageCollection(true);
+		CollectGarbage(RF_NoFlags, true);
+	}
+	
 	CookedClusterCount++;
 	UE_LOG(LogHotPatcher,Display,TEXT("ExecuteCookCluster %d with %d assets, total cluster %d"),CookedClusterCount,CookCluster.AssetDetails.Num(),ClusterCount);
 	
@@ -372,11 +378,6 @@ void USingleCookerProxy::ExecCookCluster(const FCookCluster& CookCluster)
 	// CleanClusterCachedPlatformData(CookCluster);
 	UFlibShaderCodeLibraryHelper::WaitShaderCompilingComplete();
 	UFlibHotPatcherCoreHelper::WaitForAsyncFileWrites();
-	// for GC
-	{
-		GEngine->ForceGarbageCollection(true);
-		CollectGarbage(RF_NoFlags, true);
-	}
 }
 
 void USingleCookerProxy::Tick(float DeltaTime)
@@ -603,10 +604,15 @@ FCookCluster USingleCookerProxy::GetPackageTrackerAsCluster()
 		PackageTrackerCluster.AssetDetails.Empty();
 		for(FName LongPackageName:PackageTracker->GetPendingPackageSet())
 		{
+			if(!FPackageName::DoesPackageExist(LongPackageName.ToString()))
+			{
+				continue;
+			}
+			
 			// make asset data to asset registry
-			FSoftObjectPath ObjectPath(
-				UFlibAssetManageHelper::LongPackageNameToPackagePath(LongPackageName.ToString())
-			);
+			FString PackagePath = UFlibAssetManageHelper::LongPackageNameToPackagePath(LongPackageName.ToString());
+			
+			FSoftObjectPath ObjectPath(PackagePath);
 			UFlibAssetManageHelper::UpdateAssetRegistryData(ObjectPath.GetLongPackageName());
 			
 			FAssetData AssetData;
