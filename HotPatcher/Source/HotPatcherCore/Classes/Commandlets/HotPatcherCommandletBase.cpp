@@ -37,6 +37,26 @@ protected:
 	UHotPatcherCommandletBase* CommandletIns;
 };
 
+FString UHotPatcherCommandletBase::GetCrashDir()
+{
+	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(),TEXT("Saved/HotPatcher/Crashs")));
+}
+
+void UHotPatcherCommandletBase::CleanCrashDir()
+{
+	if(FPaths::DirectoryExists(GetCrashDir()))
+	{
+		IFileManager::Get().DeleteDirectory(*GetCrashDir(),false,true);
+	}
+}
+
+void UHotPatcherCommandletBase::OnHandleSystemError()
+{
+	FString CrashTagFile = FPaths::Combine(GetCrashDir(),FString::Printf(TEXT("%s.txt"),*GetCmdletName()));
+	bool bSaveCrashTag = FFileHelper::SaveStringToFile(GetCmdletName(),*CrashTagFile);
+	UE_LOG(LogHotPatcherCommandletBase,Display,TEXT("%s Catch SystemError,Save CrashTag to %s(%s)"),*GetCmdletName(),*CrashTagFile,bSaveCrashTag ? TEXT("TRUE"):TEXT("FALSE"));
+}
+
 void UHotPatcherCommandletBase::Update(const FString& Params)
 {
 	FString CommandletName;
@@ -97,5 +117,13 @@ int32 UHotPatcherCommandletBase::Main(const FString& Params)
 		return -1;
 	}
 	
+	FCoreDelegates::OnHandleSystemError.AddLambda([this](){ this->OnHandleSystemError(); });
+
+	if(IsRunningCommandlet() && !FParse::Param(FCommandLine::Get(), TEXT("NoSearchAllAssets")))
+	{
+		SCOPED_NAMED_EVENT_TEXT("SearchAllAssets",FColor::Red);
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+		AssetRegistryModule.Get().SearchAllAssets(true);
+	}
 	return 0;
 }

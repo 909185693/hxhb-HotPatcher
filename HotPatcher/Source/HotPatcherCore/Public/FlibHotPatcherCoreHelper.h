@@ -154,6 +154,7 @@ public:
 	static FProcHandle DoUnrealPak(TArray<FString> UnrealPakCommandletOptions, bool block);
 
 	static FString GetMetadataDir(const FString& ProjectDir,const FString& ProjectName,ETargetPlatform Platform);
+	static void CleanDefaultMetadataCache(const TArray<ETargetPlatform>& TargetPlatforms);
 	
 	static void BackupMetadataDir(const FString& ProjectDir,const FString& ProjectName,const TArray<ETargetPlatform>& Platforms,const FString& OutDir);
 	static void BackupProjectConfigDir(const FString& ProjectDir,const FString& OutDir);
@@ -229,7 +230,8 @@ public:
 		const TArray<FString>& InIgnoreOptions);
 
 	static FProjectPackageAssetCollection ImportProjectSettingsPackages();
-
+	
+	static void WaitDistanceFieldAsyncQueueComplete();
 	static void WaitForAsyncFileWrites();
 	static void WaitDDCComplete();
 	static bool IsCanCookPackage(const FString& LongPackageName);

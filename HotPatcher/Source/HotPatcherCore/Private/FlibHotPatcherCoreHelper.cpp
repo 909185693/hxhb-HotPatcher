@@ -37,6 +37,7 @@
 #include "Misc/CoreMisc.h"
 #include "DerivedDataCacheInterface.h"
 
+
 DEFINE_LOG_CATEGORY(LogHotPatcherCoreHelper);
 
 TArray<FString> UFlibHotPatcherCoreHelper::GetAllCookOption()
@@ -860,8 +861,21 @@ FString UFlibHotPatcherCoreHelper::GetMetadataDir(const FString& ProjectDir, con
 	return FPaths::Combine(ProjectDir,TEXT("Saved/Cooked"),PlatformName,ProjectName,TEXT("Metadata"));
 }
 
+void UFlibHotPatcherCoreHelper::CleanDefaultMetadataCache(const TArray<ETargetPlatform>& TargetPlatforms)
+{
+	SCOPED_NAMED_EVENT_TEXT("CleanDefaultMetadataCache",FColor::Red);
+	for(ETargetPlatform Platform:TargetPlatforms)
+	{
+		FString MetadataDir = GetMetadataDir(FPaths::ProjectDir(),FApp::GetProjectName(),Platform);
+		if(FPaths::DirectoryExists(MetadataDir))
+		{
+			IFileManager::Get().DeleteDirectory(*MetadataDir,false,true);
+		}
+	}
+}
+
 void UFlibHotPatcherCoreHelper::BackupMetadataDir(const FString& ProjectDir, const FString& ProjectName,
-	const TArray<ETargetPlatform>& Platforms, const FString& OutDir)
+                                                  const TArray<ETargetPlatform>& Platforms, const FString& OutDir)
 {
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 	for(const auto& Platform:Platforms)
@@ -2283,7 +2297,8 @@ void UFlibHotPatcherCoreHelper::WaitObjectsCachePlatformDataComplete(TSet<UObjec
 		// Wait for all shaders to finish compiling
 		UFlibShaderCodeLibraryHelper::WaitShaderCompilingComplete();
 	}
-
+	UFlibHotPatcherCoreHelper::WaitDistanceFieldAsyncQueueComplete();
+	
 	{
 		SCOPED_NAMED_EVENT_TEXT("FlushAsyncLoading And WaitingAsyncTasks",FColor::Red);
 		FlushAsyncLoading();
@@ -2329,7 +2344,16 @@ void UFlibHotPatcherCoreHelper::WaitObjectsCachePlatformDataComplete(TSet<UObjec
 			
 			if(!!PendingCachePlatformDataObjects.Num())
 			{
+			#if ENGINE_MAJOR_VERSION > 4
+				// call ProcessAsyncTasks instead of pure wait using Sleep
+				while (FAssetCompilingManager::Get().GetNumRemainingAssets() > 0)
+				{
+					// Process any asynchronous Asset compile results that are ready, limit execution time
+					FAssetCompilingManager::Get().ProcessAsyncTasks(true);
+				}
+			#else
 				FPlatformProcess::Sleep(0.1f);
+			#endif // ENGINE_MAJOR_VERSION > 4
 				GLog->Flush();
 			}
 		}
@@ -2680,4 +2704,15 @@ void UFlibHotPatcherCoreHelper::DumpActiveTargetPlatforms()
 FString UFlibHotPatcherCoreHelper::GetPlatformsStr(TArray<ETargetPlatform> Platforms)
 {
 	return UFlibPatchParserHelper::GetPlatformsStr(Platforms);
+}
+
+#include "DistanceFieldAtlas.h"
+void UFlibHotPatcherCoreHelper::WaitDistanceFieldAsyncQueueComplete()
+{
+	SCOPED_NAMED_EVENT_TEXT("WaitDistanceFieldAsyncQueueComplete",FColor::Red);
+	if (GDistanceFieldAsyncQueue)
+	{
+		UE_LOG(LogHotPatcherCoreHelper, Display, TEXT("Waiting for distance field async operations..."));
+		GDistanceFieldAsyncQueue->BlockUntilAllBuildsComplete();
+	}
 }
