@@ -20,6 +20,10 @@ FExportPatchSettings::FExportPatchSettings()
 		UFlibPatchParserHelper::GetProjectName(),
 		TEXT("Versions/version.json")
 	);
+#if WITH_UE5
+	StorageCookedDir = TEXT("[PROJECTDIR]/Saved/HotPatcher/Cooked");
+	bStandaloneMode = true;
+#endif
 }
 
 void FExportPatchSettings::Init()
@@ -160,6 +164,9 @@ FString FExportPatchSettings::GetCombinedAdditionalCommandletArgs() const
 		FHotPatcherSettingBase::GetCombinedAdditionalCommandletArgs(),
 		UFlibPatchParserHelper::GetTargetPlatformsCmdLine(GetPakTargetPlatforms()),
 		IsEnableProfiling() ? TEXT("-trace=cpu,loadtimetrace") : TEXT("")
+#if WITH_UE5
+		,TEXT("AssetGatherAll=true -logcmds=\"LogCookCommandlet Error,LogCook Error,LogAssetRegistryGenerator Error\"")
+#endif
 	});
 }
 

@@ -9,19 +9,29 @@
 
 void FHotPatcherPackageWriter::Initialize(const FCookInfo& Info){}
 
+#if !UE_VERSION_NEWER_THAN(5,1,1)
 void FHotPatcherPackageWriter::AddToExportsSize(int64& ExportsSize)
 {
 	TPackageWriterToSharedBuffer<ICookedPackageWriter>::AddToExportsSize(ExportsSize);
 }
+#endif
 
 void FHotPatcherPackageWriter::BeginPackage(const FBeginPackageInfo& Info)
 {
 	TPackageWriterToSharedBuffer<ICookedPackageWriter>::BeginPackage(Info);
 }
 
-void FHotPatcherPackageWriter::BeginCook(){}
+void FHotPatcherPackageWriter::BeginCook(
+#if UE_VERSION_NEWER_THAN(5,1,1)
+		const FCookInfo& Info
+#endif
+){}
 
-void FHotPatcherPackageWriter::EndCook(){}
+void FHotPatcherPackageWriter::EndCook(
+#if UE_VERSION_NEWER_THAN(5,1,1)
+		const FCookInfo& Info
+#endif
+){}
 
 // void FHotPatcherPackageWriter::Flush()
 // {
@@ -55,12 +65,14 @@ bool FHotPatcherPackageWriter::GetPreviousCookedBytes(const FPackageInfo& Info, 
 {
 	return ICookedPackageWriter::GetPreviousCookedBytes(Info, OutData);
 }
-
+#if UE_VERSION_OLDER_THAN(5,3,0)
 void FHotPatcherPackageWriter::CompleteExportsArchiveForDiff(const FPackageInfo& Info,
 	FLargeMemoryWriter& ExportsArchive)
 {
+
 	ICookedPackageWriter::CompleteExportsArchiveForDiff(Info, ExportsArchive);
 }
+#endif
 
 void FHotPatcherPackageWriter::CollectForSavePackageData(FRecord& Record, FCommitContext& Context)
 {
@@ -356,5 +368,12 @@ void FHotPatcherPackageWriter::FWriteFileData::Write(FMD5& AccumulatedHash, EWri
 		}
 	}
 }
+#if UE_VERSION_NEWER_THAN(5,1,1)
+TFuture<FCbObject> FHotPatcherPackageWriter::WriteMPCookMessageForPackage(FName PackageName)
+{
+	TPromise<FCbObject> Promise;
+	return Promise.GetFuture();
+}
+#endif
 
 #endif

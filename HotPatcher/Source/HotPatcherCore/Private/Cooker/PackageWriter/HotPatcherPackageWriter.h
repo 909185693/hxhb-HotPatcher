@@ -1,7 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Resources/Version.h"
-
+#include "Misc/EngineVersionComparison.h"
 #if WITH_PACKAGE_CONTEXT && ENGINE_MAJOR_VERSION > 4
 #include "Serialization/PackageWriter.h"
 #include "PackageWriterToSharedBuffer.h"
@@ -17,11 +17,21 @@ public:
 	}
 
 	virtual void BeginPackage(const FBeginPackageInfo& Info) override;
+#if !UE_VERSION_NEWER_THAN(5,1,1) // FOR UE5.1
 	virtual void AddToExportsSize(int64& ExportsSize) override;
+#endif
 	virtual FDateTime GetPreviousCookTime() const override;
 	virtual void Initialize(const FCookInfo& Info) override;
-	virtual void BeginCook() override;
-	virtual void EndCook() override;
+	virtual void BeginCook(
+#if UE_VERSION_NEWER_THAN(5,1,1)
+		const FCookInfo& Info
+#endif
+	) override;
+	virtual void EndCook(
+#if UE_VERSION_NEWER_THAN(5,1,1)
+		const FCookInfo& Info
+#endif
+	) override;
 	// virtual void Flush() override;
 	virtual TUniquePtr<FAssetRegistryState> LoadPreviousAssetRegistry()override;
 	
@@ -30,12 +40,17 @@ public:
 	virtual void RemoveCookedPackages() override;
 	virtual void MarkPackagesUpToDate(TArrayView<const FName> UpToDatePackages) override;
 	virtual bool GetPreviousCookedBytes(const FPackageInfo& Info, FPreviousCookedBytesData& OutData) override;
-	virtual void CompleteExportsArchiveForDiff(const FPackageInfo& Info, FLargeMemoryWriter& ExportsArchive) override;
-
+#if UE_VERSION_OLDER_THAN(5,3,0)
+	virtual void CompleteExportsArchiveForDiff(const FPackageInfo& Info, FLargeMemoryWriter& ExportsArchive)override;
+#endif
 	virtual void CommitPackageInternal(FPackageRecord&& Record,const IPackageWriter::FCommitPackageInfo& Info)override;
 
 	virtual FPackageWriterRecords::FPackage* ConstructRecord() override;
-	
+#if UE_VERSION_NEWER_THAN(5,1,1)
+	virtual TFuture<FCbObject> WriteMPCookMessageForPackage(FName PackageName);
+	/** Read PackageData written by WriteMPCookMessageForPackage on a CookWorker. Called only on CookDirector. */
+	virtual bool TryReadMPCookMessageForPackage(FName PackageName, FCbObjectView Message){ return false;}
+#endif
 	// virtual TFuture<FMD5Hash> CommitPackage(FCommitPackageInfo&& Info)override;
 	// virtual void WritePackageData(const FPackageInfo& Info, FLargeMemoryWriter& ExportsArchive, const TArray<FFileRegion>& FileRegions) override;
 	// virtual void WriteBulkData(const FBulkDataInfo& Info, const FIoBuffer& BulkData, const TArray<FFileRegion>& FileRegions) override;

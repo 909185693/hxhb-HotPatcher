@@ -103,11 +103,6 @@ void FHotPatcherEditorModule::StartupModule()
 	MissionNotifyProay->AddToRoot();
 	
 	PluginCommands = MakeShareable(new FUICommandList);
-	PluginCommands->MapAction(
-		FHotPatcherCommands::Get().PluginAction,
-		FExecuteAction::CreateRaw(this, &FHotPatcherEditorModule::PluginButtonClicked),
-		FCanExecuteAction());
-	
 	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>("LevelEditor");
 	{
 		TSharedPtr<FExtender> MenuExtender = MakeShareable(new FExtender());
@@ -161,17 +156,29 @@ void FHotPatcherEditorModule::OpenDockTab()
 {
 	if(!DockTab.IsValid() || !GPatchSettings)
 	{
-		PluginButtonClicked();
+		FSHotPatcherContext Context;
+		Context.Category = TEXT("Patcher");
+		Context.ActionName = TEXT("ByPatch");
+		PluginButtonClicked(Context);
 	}
 }
 
-void FHotPatcherEditorModule::PluginButtonClicked()
+void FHotPatcherEditorModule::PluginButtonClicked(const FSHotPatcherContext& Context)
 {
+	if(DockTab.IsValid())
+	{
+		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HotPatcherTabName);
+		DockTab.Reset();
+	}
+	
 	if (!DockTab.IsValid())
 	{
-		FGlobalTabmanager::Get()->RegisterNomadTabSpawner(HotPatcherTabName, FOnSpawnTab::CreateRaw(this, &FHotPatcherEditorModule::OnSpawnPluginTab))
-			.SetDisplayName(LOCTEXT("FHotPatcherTabTitle", "HotPatcher"))
-			.SetMenuType(ETabSpawnerMenuType::Hidden);
+		FGlobalTabmanager::Get()->RegisterNomadTabSpawner(HotPatcherTabName, FOnSpawnTab::CreateLambda([=](const class FSpawnTabArgs& InSpawnTabArgs)
+		{
+			return SpawnHotPatcherTab(Context);
+		}))
+		.SetDisplayName(LOCTEXT("FHotPatcherTabTitle", "HotPatcher"))
+		.SetMenuType(ETabSpawnerMenuType::Hidden);
 	}
 	FGlobalTabmanager::Get()->InvokeTab(HotPatcherTabName);
 }
@@ -184,15 +191,99 @@ void FHotPatcherEditorModule::OnTabClosed(TSharedRef<SDockTab> InTab)
 
 void FHotPatcherEditorModule::AddMenuExtension(FMenuBuilder& Builder)
 {
-	Builder.AddMenuEntry(FHotPatcherCommands::Get().PluginAction);
+	FSlateIcon EmptyIcon(FHotPatcherStyle::GetStyleSetName(), "HotPatcher.PluginAction");
+	Builder.AddSubMenu(
+		FText::FromString(TEXT("HotPatcher")),
+		FText::FromString(TEXT("HotPatcher")),
+		FNewMenuDelegate::CreateLambda([=](FMenuBuilder& Menu)
+		{
+			Menu.AddWidget(this->HandlePickingModeContextMenu(),FText::FromString(TEXT("")),true);
+		}),
+		false,
+		EmptyIcon);
 }
-
 
 void FHotPatcherEditorModule::AddToolbarExtension(FToolBarBuilder& Builder)
 {
-	Builder.AddToolBarButton(FHotPatcherCommands::Get().PluginAction);
+	// Builder.AddToolBarButton(FHotPatcherCommands::Get().PluginAction);
+	
+	FSlateIcon EmptyIcon(FHotPatcherStyle::GetStyleSetName(), "HotPatcher.PluginAction");
+	Builder.AddComboButton(
+			FUIAction(
+				FExecuteAction(),
+				FCanExecuteAction::CreateLambda([]()->bool{return true;}),
+				FGetActionCheckState()
+			),
+			FOnGetContent::CreateLambda([this]()->TSharedRef<SWidget>
+			{
+				return this->HandlePickingModeContextMenu();
+			}),
+			FText::FromString(TEXT("HotPatcher")),
+			FText::GetEmpty(),
+			EmptyIcon
+		);
 }
 
+TSharedRef<SWidget> FHotPatcherEditorModule::HandlePickingModeContextMenu()
+{
+	const bool bShouldCloseWindowAfterMenuSelection = true;
+	FMenuBuilder MenuBuilder(bShouldCloseWindowAfterMenuSelection, nullptr);
+	FHotPatcherActionManager::FHotPatcherActionsType Actions = FHotPatcherActionManager::Get().GetHotPatcherActions();
+	TArray<FString> CategoryNames;
+	Actions.GetKeys(CategoryNames);
+
+	// for Main Page
+	{
+		FSlateIcon HotPatcherIcon(FHotPatcherStyle::GetStyleSetName(), "HotPatcher.PluginAction");
+		FSHotPatcherContext Context;
+		MenuBuilder.AddMenuEntry(
+			FText::FromString(TEXT("MAIN")),
+			FText::FromString(TEXT("MAIN")),
+			HotPatcherIcon,
+			FUIAction(FExecuteAction::CreateLambda([=]()
+			{
+				this->PluginButtonClicked(Context);
+			})));
+		MenuBuilder.AddMenuSeparator();
+	}
+	
+	for(int32 index = 0; index < CategoryNames.Num(); ++index)
+	{
+		TArray<FString> ActionKeys;
+		Actions.Find(CategoryNames[index])->GetKeys(ActionKeys);
+
+		FString CategoryName = CategoryNames[index];
+		if(CategoryName.Equals(TEXT("NoSlate"))){ continue; }
+		if(index && !(index % 2))
+		{
+			MenuBuilder.AddMenuSeparator();
+		}
+		MenuBuilder.AddSubMenu(
+			FText::FromString(CategoryName),
+			FText::FromString(CategoryName),
+			FNewMenuDelegate::CreateLambda([this,CategoryName,ActionKeys](FMenuBuilder& Menu)
+			{
+				for(const auto& ActionName:ActionKeys)
+				{
+					FSHotPatcherContext Context;
+					Context.Category = CategoryName;
+					Context.ActionName = ActionName;
+					Menu.AddMenuEntry(
+						FText::FromString(ActionName),
+						FText::FromString(ActionName),
+						FSlateIcon(),
+						FUIAction(FExecuteAction::CreateLambda([=]()
+						{
+							this->PluginButtonClicked(Context);
+						}))
+					);
+				}
+			}),
+			false
+		);
+	}
+	return MenuBuilder.MakeWidget();
+}
 
 
 TArray<FAssetData> FHotPatcherEditorModule::GetSelectedAssetsInBrowserContent()
@@ -212,7 +303,7 @@ TArray<FString> FHotPatcherEditorModule::GetSelectedFolderInBrowserContent()
 }
 
 
-TSharedRef<class SDockTab> FHotPatcherEditorModule::OnSpawnPluginTab(const class FSpawnTabArgs& InSpawnTabArgs)
+TSharedRef<SDockTab> FHotPatcherEditorModule::SpawnHotPatcherTab(const FSHotPatcherContext& Context)
 {
 	return SAssignNew(DockTab,SDockTab)
 		.TabRole(ETabRole::NomadTab)
@@ -221,10 +312,9 @@ TSharedRef<class SDockTab> FHotPatcherEditorModule::OnSpawnPluginTab(const class
 		.OnTabClosed(SDockTab::FOnTabClosedCallback::CreateRaw(this,&FHotPatcherEditorModule::OnTabClosed))
 		.Clipping(EWidgetClipping::ClipToBounds)
 		[
-			SNew(SHotPatcher)
+			SNew(SHotPatcher,Context)
 		];
 }
-
 
 #if WITH_EDITOR_SECTION 
 
@@ -248,6 +338,7 @@ void FHotPatcherEditorModule::CreateRootMenu()
 
 void FHotPatcherEditorModule::CreateAssetContextMenu(FToolMenuSection& InSection)
 {
+#if !WITH_UE5
 	InSection.AddSubMenu(
 		"CookActionsSubMenu",
 		LOCTEXT("CookActionsSubMenuLabel", "Cook Actions"),
@@ -260,6 +351,7 @@ void FHotPatcherEditorModule::CreateAssetContextMenu(FToolMenuSection& InSection
 		false, 
 		FSlateIcon(*StyleSetName, "ContentBrowser.AssetActions")
 		);
+#endif
 	InSection.AddSubMenu(
 		"CookAndPakActionsSubMenu",
 		LOCTEXT("CookAndPakActionsSubMenuLabel", "Cook And Pak Actions"),
@@ -356,16 +448,6 @@ void FHotPatcherEditorModule::MakeCookAndPakActionsSubMenu(UToolMenu* Menu)
 					FUIAction(FExecuteAction::CreateRaw(this, &FHotPatcherEditorModule::OnCookAndPakPlatform, Platform,false)), NAME_None, EUserInterfaceActionType::Button);
 			}
 			));
-		
-		// Section.AddMenuEntry(
-  //           FName(*THotPatcherTemplateHelper::GetEnumNameByValue(Platform)),
-  //           FText::Format(LOCTEXT("Platform", "{0}"), UKismetTextLibrary::Conv_StringToText(THotPatcherTemplateHelper::GetEnumNameByValue(Platform))),
-  //           FText(),
-  //           FSlateIcon(),
-  //           FUIAction(
-  //               FExecuteAction::CreateRaw(this, &FHotPatcherEditorModule::OnCookAndPakPlatform, Platform)
-  //           )
-        //);
 	}
 }
 
@@ -414,7 +496,7 @@ void FHotPatcherEditorModule::OnAddToPatchSettings(const FToolMenuContext& MenuC
 	{
 		FPatcherSpecifyAsset PatchSettingAssetElement;
 		FSoftObjectPath AssetObjectPath;
-		AssetObjectPath.SetPath(AssetData.ObjectPath.ToString());
+		AssetObjectPath.SetPath(UFlibAssetManageHelper::GetObjectPathByAssetData(AssetData));
 		PatchSettingAssetElement.Asset = AssetObjectPath;
 		AssetsSoftPath.AddUnique(PatchSettingAssetElement);
 	}
@@ -562,7 +644,11 @@ void FHotPatcherEditorModule::OnCookAndPakPlatform(ETargetPlatform Platform, boo
 		CurrentAsset.AssetRegistryDependencyTypes.AddUnique(EAssetRegistryDependencyTypeEx::Packages);
 		IncludeAssets.AddUnique(CurrentAsset);
 	}
-	CookAndPakByAssetsAndFilters(IncludeAssets,IncludePaths,TArray<ETargetPlatform>{Platform});
+	CookAndPakByAssetsAndFilters(IncludeAssets,IncludePaths,TArray<ETargetPlatform>{Platform}
+#if WITH_UE5
+	,true
+#endif
+	);
 }
 
 void FHotPatcherEditorModule::OnObjectSaved(UObject* ObjectSaved)

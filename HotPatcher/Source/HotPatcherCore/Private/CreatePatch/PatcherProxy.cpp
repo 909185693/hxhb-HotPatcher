@@ -5,15 +5,14 @@
 #include "CreatePatch/HotPatcherContext.h"
 #include "CreatePatch/ScopedSlowTaskContext.h"
 #include "CreatePatch/HotPatcherContext.h"
-
 #include "FlibHotPatcherCoreHelper.h"
 #include "ShaderLibUtils/FlibShaderCodeLibraryHelper.h"
 #include "Cooker/MultiCooker/FCookShaderCollectionProxy.h"
+#include "AssetRegistry.h"
 
 // engine header
 #include "Async/Async.h"
 #include "CoreGlobals.h"
-#include "AssetRegistryState.h"
 #include "ShaderCompiler.h"
 #include "Dom/JsonValue.h"
 #include "HAL/PlatformFilemanager.h"
@@ -666,6 +665,48 @@ namespace PatchWorker
 						
 						SingleCookerProxy->Shutdown();
 						SingleCookerProxy->RemoveFromRoot();
+
+#if WITH_UE5 // add WP additional
+						TSet<FName> WorldPackages;
+						int32 Size = ChunkAssets.Num();
+						FCriticalSection	LocalSynchronizationObject;
+						ParallelFor(Size,[&](int32 index)
+						{
+							if(ChunkAssets[index].AssetType.IsEqual(TEXT("World")))
+							{
+								FScopeLock Lock(&LocalSynchronizationObject);
+								WorldPackages.Add(ChunkAssets[index].PackagePath);
+							}
+						});
+						FString StorageCookedDir = Context.GetSettingObject()->GetStorageCookedDir();
+						for(const auto& WorldPackage:WorldPackages)
+						{
+							FExternDirectoryInfo DirectoryInfo;
+							{
+								FSoftObjectPath ObjectPath{WorldPackage};
+								// abs
+								FString WorldCookedPath = UFlibHotPatcherCoreHelper::GetAssetCookedSavePath(StorageCookedDir,ObjectPath.GetLongPackageName(), PlatformName);
+								FString EndWith = FPaths::GetExtension(WorldCookedPath,true);
+								WorldCookedPath.RemoveFromEnd(EndWith);
+								// // mount path
+								FString WorldMountPath = WorldCookedPath;
+								WorldMountPath.RemoveFromStart(FPaths::Combine(StorageCookedDir,PlatformName));
+								WorldMountPath = FString::Printf(TEXT("../../..%s"),*WorldMountPath);
+								FPaths::NormalizeFilename(WorldMountPath);
+						
+								DirectoryInfo.DirectoryPath.Path = WorldCookedPath;
+								DirectoryInfo.MountPoint = WorldMountPath;
+							}
+							if(FPaths::DirectoryExists(DirectoryInfo.DirectoryPath.Path))
+							{
+								const TArray<FExternFileInfo>& WPAdditional = UFlibPatchParserHelper::ParserExDirectoryAsExFiles(TArray<FExternDirectoryInfo>{DirectoryInfo});
+								for(const auto& WPAdditionalFile:WPAdditional)
+								{
+									Context.AddExternalFile(PlatformName,Chunk.ChunkName,WPAdditionalFile);
+								}
+							}
+						}
+#endif
 					}
 				}
 			}
@@ -843,33 +884,7 @@ namespace PatchWorker
 			TArray<FString> PatchedPakCommand;
 			for(const auto& PakAssetPath: PakCommand.PakCommands)
 			{
-				auto RemoveDoubleQuoteLambda = [](const FString& InStr)->FString
-				{
-					FString resultStr = InStr;
-					if(resultStr.StartsWith(TEXT("\"")))
-					{
-						resultStr.RemoveAt(0);
-					}
-					if(resultStr.EndsWith(TEXT("\"")))
-					{
-						resultStr.RemoveAt(resultStr.Len() - 1);
-					}
-					return resultStr;
-				};
-
-				auto ParseUassetLambda = [&RemoveDoubleQuoteLambda](const FString& InAsset)->FPakCommandItem
-				{
-					FPakCommandItem result;
-					TArray<FString> AssetPakCmd = UKismetStringLibrary::ParseIntoArray(InAsset,TEXT("\" "));
-
-					FString AssetAbsPath = AssetPakCmd[0];
-					FString AssetMountPath = AssetPakCmd[1];
-					result.AssetAbsPath = RemoveDoubleQuoteLambda(AssetAbsPath);
-					result.AssetMountPath = RemoveDoubleQuoteLambda(AssetMountPath);
-					return result;
-				};
-
-				FPakCommandItem PakAssetInfo = ParseUassetLambda(PakAssetPath);
+				FPakCommandItem PakAssetInfo = UFlibHotPatcherCoreHelper::ParsePakResponseFileLine(PakAssetPath);
 				if(Context.GetSettingObject()->GetBinariesPatchConfig().IsMatchIgnoreRules(PakAssetInfo))
 				{
 					PatchedPakCommand.AddUnique(PakAssetPath);
@@ -1175,7 +1190,7 @@ namespace PatchWorker
 							}
 						}//);
 							
-						if (!(Chunk.bStorageUnrealPakList && Chunk.bOutputDebugInfo))
+						if (!(Context.GetSettingObject()->bStorageUnrealPakList && Chunk.bStorageUnrealPakList && Chunk.bOutputDebugInfo))
 						{
 							IFileManager::Get().Delete(*PakListFile);
 						}
@@ -1445,8 +1460,10 @@ namespace PatchWorker
 			Context.GetSettingObject()->GetCurrentVersionSavePath(),
 			FString::Printf(TEXT("%s_PakResults.json"),*Context.CurrentVersion.VersionId)
 		);
-		ExportStructToFile(Context,PatherResult,PakResultPath,true,TEXT("PakResults"));
-		
+		if(PatherResult.PatcherAssetDetails.Num())
+		{
+			ExportStructToFile(Context,PatherResult,PakResultPath,true,TEXT("PakResults"));
+		}
 		if(!Context.GetSettingObject()->IsStoragePakFileInfo())
 			return true;
 		if(Context.GetSettingObject())

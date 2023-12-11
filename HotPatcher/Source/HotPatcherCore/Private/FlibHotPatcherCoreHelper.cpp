@@ -36,7 +36,9 @@
 #include "Misc/EngineVersionComparison.h"
 #include "Misc/CoreMisc.h"
 #include "DerivedDataCacheInterface.h"
-
+#include "HotPatcherRuntime.h"
+#include "Misc/ScopeExit.h"
+#include "Misc/EngineVersionComparison.h"
 
 DEFINE_LOG_CATEGORY(LogHotPatcherCoreHelper);
 
@@ -264,7 +266,7 @@ FString ConvertToFullSandboxPath( const FString &FileName, bool bForWrite )
 	return Result;
 }
 
-FString UFlibHotPatcherCoreHelper::GetAssetCookedSavePath(const FString& BaseDir, const FString PacakgeName, const FString& Platform)
+FString UFlibHotPatcherCoreHelper::GetAssetCookedSavePath(const FString& BaseDir, const FString PacakgeName, const FString& Platform,bool bSkipPlatform)
 {
 	SCOPED_NAMED_EVENT_TEXT("UFlibHotPatcherCoreHelper::GetCookAssetsSaveDir",FColor::Red);
 	FString CookDir;
@@ -277,10 +279,10 @@ FString UFlibHotPatcherCoreHelper::GetAssetCookedSavePath(const FString& BaseDir
 	{
 		StandardFilename = FPaths::ConvertRelativePathToFull(Filename);
 		FString SandboxFilename = ConvertToFullSandboxPath(*StandardFilename, true);
-		CookDir = FPaths::Combine(BaseDir,Platform,SandboxFilename);
+		CookDir = FPaths::Combine(BaseDir,bSkipPlatform ? TEXT(""): Platform,SandboxFilename);
+		FPaths::NormalizeFilename(CookDir);
 	}
 	PRAGMA_ENABLE_DEPRECATION_WARNINGS
-	
 	return 	CookDir;
 }
 
@@ -297,12 +299,10 @@ FString UFlibHotPatcherCoreHelper::GetProjectCookedDir()
 #include "Serialization/BulkDataManifest.h"
 #endif
 
-#if ENGINE_MAJOR_VERSION > 4 /*&& ENGINE_MINOR_VERSION > 0 */
+#if WITH_UE5
 #include "ZenStoreWriter.h"
 #include "Cooker/PackageWriter/HotPatcherPackageWriter.h"
 #endif
-
-
 
 FSavePackageContext* UFlibHotPatcherCoreHelper::CreateSaveContext(const ITargetPlatform* TargetPlatform,
 	bool bUseZenLoader,
@@ -329,7 +329,7 @@ FSavePackageContext* UFlibHotPatcherCoreHelper::CreateSaveContext(const ITargetP
 	SavePackageContext	= new FSavePackageContext(LooseFileWriter, BulkDataManifest, bLegacyBulkDataOffsets);
 #endif
 	
-#if ENGINE_MAJOR_VERSION > 4 /*&& ENGINE_MINOR_VERSION > 0*/
+#if WITH_UE5
 	ICookedPackageWriter* PackageWriter = nullptr;
 	FString WriterDebugName;
 	if (bUseZenLoader)
@@ -401,56 +401,48 @@ bool UFlibHotPatcherCoreHelper::SavePlatformBulkDataManifest(TMap<ETargetPlatfor
 #endif
 	return bRet;
 }
-#endif
 
-void UFlibHotPatcherCoreHelper::CookAssets(
-	const TArray<FSoftObjectPath>& Assets,
-	const TArray<ETargetPlatform>& Platforms,
-	FCookActionCallback CookActionCallback,
-#if WITH_PACKAGE_CONTEXT
-	class TMap<ETargetPlatform, FSavePackageContext*> PlatformSavePackageContext,
-#endif
-	const FString& InSavePath
-)
+bool UFlibHotPatcherCoreHelper::CookPackages(const TArray<UPackage*> Packages,
+	TMap<ETargetPlatform, ITargetPlatform*> CookPlatforms, FCookActionCallback CookActionCallback,
+	TMap<FString, FSavePackageContext*> PlatformSavePackageContext, const TMap<FName, FString>& CookedPlatformSavePaths,
+	bool bStorageConcurrent,
+	bool bUseCmdletImpl)
 {
-	SCOPED_NAMED_EVENT_TEXT("CookAssets",FColor::Red);
-	TArray<FString> StringPlatforms;
-#if WITH_PACKAGE_CONTEXT
-	TMap<FString,FSavePackageContext*> FinalPlatformSavePackageContext;
-#endif
-	TMap<ETargetPlatform,ITargetPlatform*> CookPlatforms; 
-	for(const auto& Platform:Platforms)
+	if(bUseCmdletImpl)
 	{
-		FString PlatformName = THotPatcherTemplateHelper::GetEnumNameByValue(Platform);
-		StringPlatforms.AddUnique(PlatformName);
-#if WITH_PACKAGE_CONTEXT
-		FSavePackageContext* CurrentPackageContext = NULL;
-		if(PlatformSavePackageContext.Contains(Platform))
-		{
-			CurrentPackageContext = *PlatformSavePackageContext.Find(Platform);
-		}
-		 
-		FinalPlatformSavePackageContext.Add(PlatformName,CurrentPackageContext);
-#endif
-		ITargetPlatform* PlatformIns = GetPlatformByName(PlatformName);
-		if(PlatformIns)
-		{
-			CookPlatforms.Add(Platform,PlatformIns);
-		}
+		return CookPackagesByCmdlet(Packages,CookPlatforms,CookActionCallback,CookedPlatformSavePaths);
 	}
-	
-	for(int32 index = 0; index < Assets.Num();++index)
+	if(bStorageConcurrent) 
+	{ 
+		GIsSavingPackage = true;
+		GIsCookerLoadingPackage = true;
+	}
+	ParallelFor(Packages.Num(), [&](int32 AssetIndex)
 	{
-		UE_LOG(LogHotPatcherCoreHelper,Display,TEXT("%d packages is cooked,Remain %d Total %d"), index, Assets.Num() - index, Assets.Num());
-		CookPackage(Assets[index],CookPlatforms,CookActionCallback,
+		UPackage* CookPackageIns = Packages[AssetIndex];
+		if(IsValid(CookPackageIns))
+		{
+			UFlibHotPatcherCoreHelper::CookPackage(
+				CookPackageIns,
+				CookPlatforms,
+				CookActionCallback,
 #if WITH_PACKAGE_CONTEXT
-			FinalPlatformSavePackageContext,
+				PlatformSavePackageContext,
 #endif
-			InSavePath,false);
+				CookedPlatformSavePaths,
+				bStorageConcurrent,
+				bUseCmdletImpl
+			);
+		}
+	},GForceSingleThread ? true : !bStorageConcurrent);
+	if(bStorageConcurrent) 
+	{
+		GIsSavingPackage = false;
+		GIsCookerLoadingPackage = true;
 	}
-	// UFlibShaderCodeLibraryHelper::WaitShaderCompilingComplete();
-	// UFlibHotPatcherCoreHelper::WaitForAsyncFileWrites();
+	return true;
 }
+#endif
 
 struct FFilterEditorOnlyFlag
 {
@@ -484,53 +476,6 @@ UE_TRACE_EVENT_END()
 #endif
 
 bool UFlibHotPatcherCoreHelper::CookPackage(
-	const FSoftObjectPath& AssetObjectPath,
-	TMap<ETargetPlatform,ITargetPlatform*> CookPlatforms,
-	FCookActionCallback CookActionCallback,
-#if WITH_PACKAGE_CONTEXT
-	class TMap<FString,FSavePackageContext*> PlatformSavePackageContext,
-#endif
-	const FString& InSavePath,
-	bool bStorageConcurrent 
-)
-{
-	SCOPED_NAMED_EVENT_TEXT("CookPackageForObjectPath",FColor::Red);
-	UPackage* Package = UFlibAssetManageHelper::GetPackage(*AssetObjectPath.GetLongPackageName());
-	return UFlibHotPatcherCoreHelper::CookPackage(Package,CookPlatforms,CookActionCallback,
-#if WITH_PACKAGE_CONTEXT
-	PlatformSavePackageContext,
-#endif
-	InSavePath,bStorageConcurrent);
-}
-
-
-bool UFlibHotPatcherCoreHelper::CookPackage(
-	UPackage* Package,
-	TMap<ETargetPlatform,ITargetPlatform*> CookPlatforms,
-	FCookActionCallback CookActionCallback,
-#if WITH_PACKAGE_CONTEXT
-	class TMap<FString,FSavePackageContext*> PlatformSavePackageContext,
-#endif
-	const FString& InSavePath,
-	bool bStorageConcurrent
-)
-{
-	FString LongPackageName = UFlibAssetManageHelper::LongPackageNameToPackagePath(Package->GetPathName());
-	TMap<FName,FString> PlatformSavePaths;
-	for(auto Platform: CookPlatforms)
-	{
-		FString SavePath = UFlibHotPatcherCoreHelper::GetAssetCookedSavePath(InSavePath,LongPackageName, Platform.Value->PlatformName());
-		PlatformSavePaths.Add(*Platform.Value->PlatformName(),SavePath);
-	}
-	
-	return UFlibHotPatcherCoreHelper::CookPackage(Package,CookPlatforms,CookActionCallback,
-#if WITH_PACKAGE_CONTEXT
-	PlatformSavePackageContext,
-#endif
-	PlatformSavePaths,bStorageConcurrent);
-}
-
-bool UFlibHotPatcherCoreHelper::CookPackage(
 	UPackage* Package,
 	TMap<ETargetPlatform,ITargetPlatform*> CookPlatforms,
 	FCookActionCallback CookActionCallback,
@@ -538,9 +483,14 @@ bool UFlibHotPatcherCoreHelper::CookPackage(
 	class TMap<FString,FSavePackageContext*> PlatformSavePackageContext,
 #endif
 	const TMap<FName,FString>& CookedPlatformSavePaths,
-	bool bStorageConcurrent
+	bool bStorageConcurrent,
+	bool bUseCmdletImpl
 )
 {
+	if(bUseCmdletImpl)
+	{
+		return CookPackagesByCmdlet(TArray<UPackage*>{Package},CookPlatforms,CookActionCallback,CookedPlatformSavePaths);
+	}
 	bool bSuccessed = false;
 
 	FString LongPackageName = UFlibAssetManageHelper::LongPackageNameToPackagePath(Package->GetPathName());
@@ -588,17 +538,12 @@ bool UFlibHotPatcherCoreHelper::CookPackage(
 		
 		for(auto& Platform:CookPlatforms)
 		{
-			// if(bIsFailedPackage)
-			// {
-			// 	CookActionCallback.OnAssetCooked(Package,Platform,ESavePackageResult::Error);
-			// 	return false;
-			// }
-			
 			FFilterEditorOnlyFlag SetPackageEditorOnlyFlag(Package,Platform.Value);
 
 			FString PackageName = PackageFileName.IsNone() ? LongPackageName :PackageFileName.ToString();
-			FString CookedSavePath = *CookedPlatformSavePaths.Find(*Platform.Value->PlatformName());
-
+			FString CookedSaveBaseDir = *CookedPlatformSavePaths.Find(*Platform.Value->PlatformName());
+			FString CookedSavePath = UFlibHotPatcherCoreHelper::GetAssetCookedSavePath(CookedSaveBaseDir,PackageName, Platform.Value->PlatformName(),true);
+			
 			ETargetPlatform TargetPlatform = Platform.Key;
 
 			/* for material cook
@@ -621,12 +566,12 @@ bool UFlibHotPatcherCoreHelper::CookPackage(
 			{
 				CurrentPlatformPackageContext = *PlatformSavePackageContext.Find(Platform.Value->PlatformName());
 			}
-		#if ENGINE_MAJOR_VERSION > 4 /*&& ENGINE_MINOR_VERSION > 0*/
+	#if WITH_UE5
 				IPackageWriter::FBeginPackageInfo BeginInfo;
 				BeginInfo.PackageName = Package->GetFName();
 				BeginInfo.LooseFilePath = CookedSavePath;
 				CurrentPlatformPackageContext->PackageWriter->BeginPackage(BeginInfo);
-		#endif
+	#endif
 	#endif
 
 			if(CookActionCallback.OnCookBegin)
@@ -644,16 +589,30 @@ bool UFlibHotPatcherCoreHelper::CookPackage(
 			}
 			
 			PRAGMA_DISABLE_DEPRECATION_WARNINGS
-			GIsCookerLoadingPackage = true;
+			if (!bStorageConcurrent) { GIsCookerLoadingPackage = true; }
 			PRAGMA_ENABLE_DEPRECATION_WARNINGS
-			FSavePackageResultStruct Result = GEditor->Save(	Package, nullptr, CookedFlags, *CookedSavePath, 
+			
+#if UE_VERSION_OLDER_THAN(5,3,0)
+			FSavePackageResultStruct Result = GEditor->Save(	Package, nullptr, CookedFlags, *CookedSavePath,
 	                                                GError, nullptr, false, false, SaveFlags, Platform.Value, 
 	                                                FDateTime::MinValue(), false, /*DiffMap*/ nullptr
 	#if WITH_PACKAGE_CONTEXT
 	                                                ,CurrentPlatformPackageContext
 	#endif
 	                                                );
-			GIsCookerLoadingPackage = false;
+#else
+			FSavePackageArgs PackageArgs;
+			PackageArgs.TopLevelFlags = CookedFlags;
+			PackageArgs.SaveFlags = SaveFlags;
+			PackageArgs.Error = GError;
+			PackageArgs.SavePackageContext = CurrentPlatformPackageContext;
+			PackageArgs.TargetPlatform = Platform.Value;
+			PackageArgs.bSlowTask = false;
+			PackageArgs.FinalTimeStamp = FDateTime::MinValue();
+			FSavePackageResultStruct Result = GEditor->Save(Package,nullptr, *CookedSavePath, PackageArgs);
+
+#endif
+			if (!bStorageConcurrent) { GIsCookerLoadingPackage = false; }
 			
 			bSuccessed = Result == ESavePackageResult::Success;
 
@@ -661,41 +620,167 @@ bool UFlibHotPatcherCoreHelper::CookPackage(
 			{
 				CookActionCallback.OnAssetCooked(Package,TargetPlatform,Result.Result);
 			}
-			
-	#if WITH_PACKAGE_CONTEXT
+					
+#if WITH_PACKAGE_CONTEXT
 			// in UE5.1
-		#if ENGINE_MAJOR_VERSION > 4 /*&& ENGINE_MINOR_VERSION > 0*/
-				// save cooked file to desk in UE5-main
-				if(bSuccessed)
-				{
-					//const FAssetPackageData* AssetPackageData = UFlibAssetManageHelper::GetPackageDataByPackageName(Package->GetFName().ToString());
-					ICookedPackageWriter::FCommitPackageInfo Info;
+			#if WITH_UE5
+			// save cooked file to desk in UE5-main
+			if(bSuccessed)
+			{
+				//const FAssetPackageData* AssetPackageData = UFlibAssetManageHelper::GetPackageDataByPackageName(Package->GetFName().ToString());
+				ICookedPackageWriter::FCommitPackageInfo Info;
 #if UE_VERSION_OLDER_THAN(5,1,0)
-					Info.bSucceeded = bSuccessed;
+				Info.bSucceeded = bSuccessed;
 #else
-					Info.Status = bSuccessed ? IPackageWriter::ECommitStatus::Success : IPackageWriter::ECommitStatus::Error;
+				Info.Status = bSuccessed ? IPackageWriter::ECommitStatus::Success : IPackageWriter::ECommitStatus::Error;
 #endif
-					Info.PackageName = Package->GetFName();
-					// PRAGMA_DISABLE_DEPRECATION_WARNINGS
-					Info.PackageGuid = FGuid::NewGuid(); //AssetPackageData ? AssetPackageData->PackageGuid : FGuid::NewGuid();
-					// PRAGMA_ENABLE_DEPRECATION_WARNINGS
-					// Info.Attachments.Add({ "Dependencies", TargetDomainDependencies });
-					// TODO: Reenable BuildDefinitionList once FCbPackage support for empty FCbObjects is in
-					//Info.Attachments.Add({ "BuildDefinitionList", BuildDefinitionList });
-					Info.WriteOptions = IPackageWriter::EWriteOptions::Write;
-					if (!!(SaveFlags & SAVE_ComputeHash))
-					{
-						Info.WriteOptions |= IPackageWriter::EWriteOptions::ComputeHash;
-					}
-					CurrentPlatformPackageContext->PackageWriter->CommitPackage(MoveTemp(Info));
+				Info.PackageName = Package->GetFName();
+				// PRAGMA_DISABLE_DEPRECATION_WARNINGS
+				Info.PackageGuid = FGuid::NewGuid(); //AssetPackageData ? AssetPackageData->PackageGuid : FGuid::NewGuid();
+				// PRAGMA_ENABLE_DEPRECATION_WARNINGS
+				// Info.Attachments.Add({ "Dependencies", TargetDomainDependencies });
+				// TODO: Reenable BuildDefinitionList once FCbPackage support for empty FCbObjects is in
+				//Info.Attachments.Add({ "BuildDefinitionList", BuildDefinitionList });
+				Info.WriteOptions = IPackageWriter::EWriteOptions::Write;
+				if (!!(SaveFlags & SAVE_ComputeHash))
+				{
+					Info.WriteOptions |= IPackageWriter::EWriteOptions::ComputeHash;
 				}
+				CurrentPlatformPackageContext->PackageWriter->CommitPackage(MoveTemp(Info));
+			}
 		#endif
-	#endif
+#endif
 		}
 
 		Package->SetPackageFlagsTo(OriginalPackageFlags);
 	}
 	return bSuccessed;
+}
+
+bool UFlibHotPatcherCoreHelper::RunCmdlet(const FString& CmdletName,const FString& Params,int32& OutRetValue)
+{
+	static int32 Counter = 0;
+	ON_SCOPE_EXIT{
+		Counter++;
+	};
+	
+	bool bStatus = false;
+	FString CmdletNameStr = CmdletName;
+	if(!CmdletNameStr.EndsWith(TEXT("Commandlet")))
+	{
+		CmdletNameStr.Append(TEXT("Commandlet"));
+	}
+	UCommandlet* CmdletCDO = nullptr;
+	UClass* SPCTCmdletClass = FindObject<UClass>(ANY_PACKAGE, *CmdletNameStr, false);
+	if(SPCTCmdletClass && SPCTCmdletClass->IsChildOf(UCommandlet::StaticClass()))
+	{
+		// CmdletCDO = Cast<UCommandlet>(SPCTCmdletClass->GetDefaultObject());
+		CmdletCDO = NewObject<UCommandlet>(SPCTCmdletClass,SPCTCmdletClass,*FString::Printf(TEXT("Cooker_%d"),Counter),RF_NoFlags,SPCTCmdletClass->GetDefaultObject());
+		CmdletCDO->AddToRoot();
+	}
+	if(CmdletCDO)
+	{
+		OutRetValue = CmdletCDO->Main(Params);
+		bStatus = true;
+		CmdletCDO->RemoveFromRoot();
+	}
+	return bStatus;
+}
+
+bool UFlibHotPatcherCoreHelper::CookPackagesByCmdlet(
+	const TArray<UPackage*> Packages,
+	TMap<ETargetPlatform, ITargetPlatform*> CookPlatforms, FCookActionCallback CookActionCallback,
+	const TMap<FName, FString>& CookedPlatformSavePaths)
+{
+	for(auto& CookPlatformPair:CookPlatforms)
+	{
+		FString PlatformName = THotPatcherTemplateHelper::GetEnumNameByValue(CookPlatformPair.Key);
+		TArray<FString> LongPackageNames;
+		TArray<FSoftObjectPath> ObjectPaths;
+		for(UPackage* Package:Packages)
+		{
+			FString LongPackageName = UFlibAssetManageHelper::PackagePathToLongPackageName(Package->GetPathName());
+			LongPackageNames.Add(LongPackageName);
+			ObjectPaths.Emplace(LongPackageName);
+			
+		}
+		
+		FString TargetPlatformName = CookPlatformPair.Value->PlatformName();
+		FString CookedSavePath = FPaths::Combine(FPaths::ProjectSavedDir(),TEXT("Cooked"),PlatformName);
+		if(CookedPlatformSavePaths.Contains(*TargetPlatformName))
+		{
+			CookedSavePath = *CookedPlatformSavePaths.Find(*CookPlatformPair.Value->PlatformName());
+		}
+		for(const auto& SoftObjectPath:ObjectPaths){ CookActionCallback.OnCookBegin(SoftObjectPath,CookPlatformPair.Key); }
+		bool bCookStatus = CookByCmdlet(LongPackageNames,CookPlatformPair.Key,CookedSavePath);
+        ESavePackageResult result = bCookStatus ? ESavePackageResult::Success : ESavePackageResult::Error;
+		for(const auto& SoftObjectPath:ObjectPaths){ CookActionCallback.OnAssetCooked(SoftObjectPath,CookPlatformPair.Key,result); }
+	}
+	return true;
+}
+
+bool UFlibHotPatcherCoreHelper::CookByCmdlet(const TArray<FString>& LongPackageNames,
+	ETargetPlatform TargetPlatform, const FString& SaveToCookedDir)
+{
+	bool bRet = false;
+	FString PlatformName = THotPatcherTemplateHelper::GetEnumNameByValue(TargetPlatform);
+	FString CookedSavePath = FPaths::Combine(FPaths::ProjectSavedDir(),TEXT("Cooked"),PlatformName);
+	if(!SaveToCookedDir.IsEmpty())
+	{
+		CookedSavePath = SaveToCookedDir;
+	}
+	
+	FString CookCmdline;
+	CookCmdline = FString::Printf(
+#if UE_VERSION_NEWER_THAN(4,25,3)
+TEXT("%s -cooksinglepackagenorefs"),
+#else
+	TEXT("%s -cooksinglepackage"),
+#endif
+	*CookCmdline);
+	CookCmdline = FString::Printf(TEXT("%s -TARGETPLATFORM=%s"),*CookCmdline,*PlatformName);
+	CookCmdline = FString::Printf(TEXT("%s -OutputDir=%s"),*CookCmdline,*CookedSavePath);
+	CookCmdline = FString::Printf(TEXT("%s -SkipZenStore"),*CookCmdline);
+	CookCmdline = FString::Printf(TEXT("%s -FastCook"),*CookCmdline);
+	if(LongPackageNames.Num())
+	{
+		UProjectPackagingSettings* PackagingSettings = GetMutableDefault<UProjectPackagingSettings>();
+		bool bShareMaterialShaderCodeBak = PackagingSettings->bShareMaterialShaderCode;
+		PackagingSettings->bShareMaterialShaderCode = false;
+#if UE_VERSION_NEWER_THAN(5,2,1) // for GC Crash in 5.3
+		bool bOriginalbUseSoftGC = false;
+		GConfig->GetBool(TEXT("CookSettings"), TEXT("bUseSoftGC"), bOriginalbUseSoftGC, GEditorIni);
+		GConfig->SetBool(TEXT("CookSettings"), TEXT("bUseSoftGC"), false, GEditorIni);
+		FString OriginalConfigText(TEXT("None"));
+		GConfig->GetString(TEXT("CookSettings"), TEXT("MemoryTriggerGCAtPressureLevel"), OriginalConfigText, GEditorIni);
+		GConfig->SetString(TEXT("CookSettings"), TEXT("MemoryTriggerGCAtPressureLevel"), TEXT("Critical"), GEditorIni);
+#endif
+		ON_SCOPE_EXIT{
+			PackagingSettings->bShareMaterialShaderCode = bShareMaterialShaderCodeBak;
+#if UE_VERSION_NEWER_THAN(5,2,1)
+			GConfig->SetBool(TEXT("CookSettings"), TEXT("bUseSoftGC"), bOriginalbUseSoftGC, GEditorIni);
+			GConfig->SetString(TEXT("CookSettings"), TEXT("MemoryTriggerGCAtPressureLevel"), *OriginalConfigText, GEditorIni);
+#endif 
+		};
+		FString MapParams = FString::Printf(TEXT("-MAP="));
+		for(const auto& LongPackageName:LongPackageNames)
+		{
+			MapParams += FString::Printf(TEXT("%s+"),*LongPackageName);
+		}
+		while(MapParams.EndsWith(TEXT("+")))
+		{
+			MapParams.RemoveFromEnd(TEXT("+"));
+		}
+		CookCmdline = FString::Printf(TEXT("%s %s"),*CookCmdline,*MapParams);
+		UE_LOG(LogHotPatcherCoreHelper,Verbose,TEXT("CookCommandlet: %s"),*CookCmdline);
+		int32 RetValue = -1;
+		if(RunCmdlet(TEXT("Cook"),CookCmdline,RetValue))
+		{
+			bRet = (RetValue == 0);
+			ESavePackageResult result = bRet ? ESavePackageResult::Success : ESavePackageResult::Error;
+		}
+	}
+	return bRet;
 }
 
 void UFlibHotPatcherCoreHelper::CookChunkAssets(
@@ -708,6 +793,17 @@ void UFlibHotPatcherCoreHelper::CookChunkAssets(
 	const FString& InSavePath
 )
 {
+	TMap<FName,FString> CookedPlatformSavePaths;
+	TMap<ETargetPlatform,ITargetPlatform*> CookPlatforms;
+	TMap<FString,FSavePackageContext*> PlatformSavePackageContextMap;
+	for(const auto& Platform:Platforms)
+	{
+		FString PlatformName = THotPatcherTemplateHelper::GetEnumNameByValue(Platform);
+		CookedPlatformSavePaths.Add(*PlatformName,FPaths::Combine(InSavePath,PlatformName));
+		ITargetPlatform* TargetPlatform = UFlibHotPatcherCoreHelper::GetTargetPlatformByName(PlatformName);
+		CookPlatforms.Add(Platform,TargetPlatform);
+		PlatformSavePackageContextMap.Add(PlatformName,*PlatformSavePackageContext.Find(Platform));
+	}
 	
 	TArray<FSoftObjectPath> SoftObjectPaths;
 
@@ -717,11 +813,16 @@ void UFlibHotPatcherCoreHelper::CookChunkAssets(
 	}
 	if(!!SoftObjectPaths.Num())
 	{
-		UFlibHotPatcherCoreHelper::CookAssets(SoftObjectPaths,Platforms,CookActionCallback,
-#if WITH_PACKAGE_CONTEXT
-		PlatformSavePackageContext,
-#endif
-		InSavePath);
+		for(const auto& AssetObjectPath:SoftObjectPaths)
+		{
+			UPackage* Package = UFlibAssetManageHelper::GetPackage(*AssetObjectPath.GetLongPackageName());
+		
+			UFlibHotPatcherCoreHelper::CookPackage(Package,CookPlatforms,CookActionCallback,
+	#if WITH_PACKAGE_CONTEXT
+			PlatformSavePackageContextMap,
+	#endif
+			CookedPlatformSavePaths,false);
+		}
 	}
 }
 
@@ -1436,9 +1537,10 @@ bool UFlibHotPatcherCoreHelper::SerializeAssetRegistry(IAssetRegistry* AssetRegi
 		FAssetData* AssetData = new FAssetData();
 		if (UFlibAssetManageHelper::GetSingleAssetsData(AssetPackagePath, *AssetData))
 		{
-			if (AssetPackagePath != AssetData->ObjectPath.ToString())
+			FString ObjectPath = UFlibAssetManageHelper::GetObjectPathByAssetData(*AssetData).ToString();
+			if (AssetPackagePath != ObjectPath)
 			{
-				UE_LOG(LogHotPatcherCoreHelper, Warning, TEXT("%s is a redirector of %s, skip!"), *AssetPackagePath, *AssetData->ObjectPath.ToString());
+				UE_LOG(LogHotPatcherCoreHelper, Warning, TEXT("%s is a redirector of %s, skip!"), *AssetPackagePath, *ObjectPath);
 				delete AssetData;
 				continue;
 			}
@@ -1973,7 +2075,11 @@ bool UFlibHotPatcherCoreHelper::IsCanCookPackage(const FString& LongPackageName)
 	PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	if (!LongPackageName.IsEmpty() && !FPackageName::IsScriptPackage(LongPackageName) && !FPackageName::IsMemoryPackage(LongPackageName))
 	{
-		bResult = UAssetManager::Get().VerifyCanCookPackage(FName(*LongPackageName),false);
+		bResult = UAssetManager::Get().VerifyCanCookPackage(
+#if !UE_VERSION_OLDER_THAN(5,3,0)
+			nullptr,
+#endif
+			FName(*LongPackageName),false);
 	}
 	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	return bResult;
@@ -2175,7 +2281,14 @@ void UFlibHotPatcherCoreHelper::CacheForCookedPlatformData(
     	
     				GIsCookerLoadingPackage = true;
     				{
+#if UE_VERSION_OLDER_THAN(5,3,0)
     					GEditor->OnPreSaveWorld(SaveFlags, World);
+#else
+						FObjectSaveContextData ContextData;
+						ContextData.SaveFlags = SaveFlags;
+						FObjectPreSaveContext Context(ContextData);
+						GEditor->OnPreSaveWorld(World, Context);
+#endif
     				}
     				{
     					bool bCleanupIsRequired = World->PreSaveRoot(TEXT(""));
@@ -2633,50 +2746,62 @@ TArray<UClass*> UFlibHotPatcherCoreHelper::GetPreCacheClasses()
 {
 	SCOPED_NAMED_EVENT_TEXT("GetPreCacheClasses",FColor::Red);
 	TArray<UClass*> Classes;
-	
-	TArray<FName> ParentClassesName = {
-		// textures
-		TEXT("Texture"),
-		TEXT("PaperSprite"),
-		// material
-		// TEXT("MaterialExpression"),
-		// TEXT("MaterialParameterCollection"),
-		// TEXT("MaterialFunctionInterface"),
-		// TEXT("MaterialInterface"),
-		// other
-		TEXT("PhysicsAsset"),
-		TEXT("PhysicalMaterial"),
-		TEXT("StaticMesh"),
-		// curve
-		TEXT("CurveFloat"),
-		TEXT("CurveVector"),
-		TEXT("CurveLinearColor"),
-		// skeletal and animation
-		TEXT("Skeleton"),
-		TEXT("SkeletalMesh"),
-		TEXT("AnimSequence"),
-		TEXT("BlendSpace1D"),
-		TEXT("BlendSpace"),
-		TEXT("AnimMontage"),
-		TEXT("AnimComposite"),
-		// blueprint
-		TEXT("UserDefinedStruct"),
-		TEXT("Blueprint"),
-		// sound
-		TEXT("SoundWave"),
-		// particles
-		TEXT("FXSystemAsset"),
-		// large ref asset
-		TEXT("ActorSequence"),
-		TEXT("LevelSequence"),
-		TEXT("World") 
-	};
-
-	for(auto& ParentClass:UFlibHotPatcherCoreHelper::GetClassesByNames(ParentClassesName))
 	{
-		Classes.Append(UFlibHotPatcherCoreHelper::GetDerivedClasses(ParentClass,true,true));
+#if !(WITH_UE5 && WITH_UE5_CUSTOM_SHADERLIB) // FOR UE5, materials asset Append to begin
+	ON_SCOPE_EXIT{	
+#endif
+		Classes.Append(UFlibHotPatcherCoreHelper::GetAllMaterialClasses());
+#if !(WITH_UE5 && WITH_UE5_CUSTOM_SHADERLIB)
+		};	
+#endif
+		
+		TArray<FName> ParentClassesName = {
+			// textures
+			TEXT("Texture"),
+			TEXT("PaperSprite"),
+			// material
+			// TEXT("MaterialExpression"),
+			// TEXT("MaterialParameterCollection"),
+			// TEXT("MaterialFunctionInterface"),
+			// TEXT("MaterialInterface"),
+			// other
+			TEXT("PhysicsAsset"),
+			TEXT("PhysicalMaterial"),
+			TEXT("StaticMesh"),
+			// curve
+			TEXT("CurveFloat"),
+			TEXT("CurveVector"),
+			TEXT("CurveLinearColor"),
+			// skeletal and animation
+			TEXT("Skeleton"),
+			TEXT("SkeletalMesh"),
+			TEXT("AnimSequence"),
+			TEXT("BlendSpace1D"),
+			TEXT("BlendSpace"),
+			TEXT("AnimMontage"),
+			TEXT("AnimComposite"),
+			// blueprint
+			TEXT("UserDefinedStruct"),
+			TEXT("Blueprint"),
+			// sound
+			TEXT("SoundWave"),
+			TEXT("SoundCue"),
+			// font
+			TEXT("Font"),
+			// particles
+			TEXT("FXSystemAsset"),
+			// large ref asset
+			TEXT("ActorSequence"),
+			TEXT("LevelSequence"),
+			TEXT("MapBuildDataRegistry"),
+			TEXT("World")
+		};
+
+		for(auto& ParentClass:UFlibHotPatcherCoreHelper::GetClassesByNames(ParentClassesName))
+		{
+			Classes.Append(UFlibHotPatcherCoreHelper::GetDerivedClasses(ParentClass,true,true));
+		}
 	}
-	Classes.Append(UFlibHotPatcherCoreHelper::GetAllMaterialClasses());
 	TSet<UClass*> Results;
 	for(const auto& Class:Classes)
 	{
@@ -2715,4 +2840,35 @@ void UFlibHotPatcherCoreHelper::WaitDistanceFieldAsyncQueueComplete()
 		UE_LOG(LogHotPatcherCoreHelper, Display, TEXT("Waiting for distance field async operations..."));
 		GDistanceFieldAsyncQueue->BlockUntilAllBuildsComplete();
 	}
+}
+
+
+FPakCommandItem UFlibHotPatcherCoreHelper::ParsePakResponseFileLine(const FString& Line)
+{
+	auto RemoveDoubleQuoteLambda = [](const FString& InStr)->FString
+	{
+		FString resultStr = InStr;
+		if(resultStr.StartsWith(TEXT("\"")))
+		{
+			resultStr.RemoveAt(0);
+		}
+		if(resultStr.EndsWith(TEXT("\"")))
+		{
+			resultStr.RemoveAt(resultStr.Len() - 1);
+		}
+		return resultStr;
+	};
+
+	auto ParseUassetLambda = [&RemoveDoubleQuoteLambda](const FString& InAsset)->FPakCommandItem
+	{
+		FPakCommandItem result;
+		TArray<FString> AssetPakCmd = UKismetStringLibrary::ParseIntoArray(InAsset,TEXT("\" "));
+
+		FString AssetAbsPath = AssetPakCmd[0];
+		FString AssetMountPath = AssetPakCmd[1];
+		result.AssetAbsPath = RemoveDoubleQuoteLambda(AssetAbsPath);
+		result.AssetMountPath = RemoveDoubleQuoteLambda(AssetMountPath);
+		return result;
+	};
+	return ParseUassetLambda(Line);
 }
